@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI to Text Studio for LLMs</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- ToneJS/Midi CDN -->
+    <script src="https://unpkg.com/@tonejs/midi"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar styling for a premium feel */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #020617;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+        /* Pulse glow animation for drag zone */
+        @keyframes pulseGlow {
+            0%, 100% { border-color: rgba(139, 92, 246, 0.4); box-shadow: 0 0 10px rgba(139, 92, 246, 0.1); }
+            50% { border-color: rgba(139, 92, 246, 0.9); box-shadow: 0 0 20px rgba(139, 92, 246, 0.3); }
+        }
+        .drag-over {
+            animation: pulseGlow 1.5s infinite;
+            background-color: rgba(139, 92, 246, 0.05) !important;
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col antialiased selection:bg-violet-500 selection:text-white">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+            <div class="bg-gradient-to-tr from-violet-600 to-fuchsia-600 p-2.5 rounded-xl shadow-lg shadow-violet-900/20">
+                <i class="fa-solid fa-music text-xl text-white"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-violet-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">
+                    MIDI-to-Text Studio
+                </h1>
+                <p class="text-xs text-slate-400 font-medium">Format standard MIDI sequences for LLM prompts</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                Local Browser Sandbox
+            </span>
+            <button onclick="toggleDeployModal()" class="text-xs bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-medium px-3.5 py-1.5 rounded-lg transition flex items-center gap-2">
+                <i class="fa-brands fa-github"></i> Deploy to Pages
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="flex-1 max-w-[1600px] w-full mx-auto p-4 md:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+        
+        <!-- Left Sidebar / File Drop & Track Configuration Panel (Col Span 5) -->
+        <section class="lg:col-span-5 flex flex-col gap-6">
+            
+            <!-- Drag & Drop Zone -->
+            <div id="dropzone" class="border-2 border-dashed border-slate-800 hover:border-violet-600/50 bg-slate-900/20 rounded-2xl p-8 text-center transition duration-300 cursor-pointer group flex flex-col items-center justify-center min-h-[220px]">
+                <input type="file" id="fileInput" accept=".mid,.midi" class="hidden">
+                <div class="w-14 h-14 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mb-4 group-hover:scale-110 transition duration-300">
+                    <i class="fa-solid fa-cloud-arrow-up text-xl text-slate-400 group-hover:text-violet-400 transition"></i>
+                </div>
+                <h3 class="font-semibold text-slate-200 text-lg mb-1">Drag & Drop MIDI File</h3>
+                <p class="text-xs text-slate-400 mb-4 max-w-xs mx-auto">Upload any standard .mid track. Files are processed entirely locally in your browser.</p>
+                <button onclick="document.getElementById('fileInput').click()" class="bg-violet-600 hover:bg-violet-500 text-white font-medium text-xs px-4 py-2 rounded-lg shadow-lg shadow-violet-900/30 transition">
+                    Browse Files
+                </button>
+            </div>
+
+            <!-- File Info / Metadata Card (Initially hidden) -->
+            <div id="metaCard" class="bg-slate-900/30 border border-slate-900 rounded-2xl p-5 hidden flex flex-col gap-4">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <span class="text-[10px] font-bold tracking-wider text-violet-400 uppercase">Loaded Composition</span>
+                        <h4 id="songTitle" class="font-bold text-slate-100 text-base truncate max-w-[250px]">Unnamed Midi</h4>
+                    </div>
+                    <button onclick="unloadMidi()" class="text-slate-400 hover:text-rose-400 p-1 rounded-lg transition" title="Clear File">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+                
+                <!-- Quick Metric Grid -->
+                <div class="grid grid-cols-3 gap-3">
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-900 text-center">
+                        <span class="block text-[10px] text-slate-400 font-semibold mb-1">Tempo</span>
+                        <span id="metaBPM" class="text-sm font-bold text-violet-400">120 <span class="text-[10px] font-normal text-slate-500">BPM</span></span>
+                    </div>
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-900 text-center">
+                        <span class="block text-[10px] text-slate-400 font-semibold mb-1">Time Sig</span>
+                        <span id="metaTimeSig" class="text-sm font-bold text-violet-400">4/4</span>
+                    </div>
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-900 text-center">
+                        <span class="block text-[10px] text-slate-400 font-semibold mb-1">Duration</span>
+                        <span id="metaDuration" class="text-sm font-bold text-violet-400">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Web Audio Synthesizer Control Section -->
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-900 flex flex-col gap-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-wave-square text-violet-400"></i> Local Audio Preview
+                        </span>
+                        <span id="playbackTimer" class="text-[10px] font-mono text-slate-400">00:00 / 00:00</span>
+                    </div>
+                    
+                    <!-- Progress bar -->
+                    <div class="w-full bg-slate-900 rounded-full h-1.5 relative overflow-hidden cursor-pointer" id="progressBarContainer">
+                        <div id="progressBar" class="bg-gradient-to-r from-violet-500 to-fuchsia-500 h-1.5 w-0 rounded-full"></div>
+                    </div>
+
+                    <!-- Synth Settings & Buttons -->
+                    <div class="flex items-center justify-between gap-3 pt-1">
+                        <div class="flex items-center gap-2">
+                            <button id="playBtn" onclick="togglePlay()" class="w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 text-white flex items-center justify-center shadow-md shadow-violet-900/20 transition">
+                                <i class="fa-solid fa-play text-sm"></i>
+                            </button>
+                            <button onclick="stopPlayback()" class="w-9 h-9 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition">
+                                <i class="fa-solid fa-stop text-xs"></i>
+                            </button>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-[10px] text-slate-400 font-semibold uppercase">Voice</label>
+                            <select id="synthWaveform" onchange="updateSynthType(this.value)" class="bg-slate-900 border border-slate-850 rounded-md text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500">
+                                <option value="triangle" selected>Triangle (Warm)</option>
+                                <option value="sine">Sine (Pure)</option>
+                                <option value="square">Square (Chiptune)</option>
+                                <option value="sawtooth">Sawtooth (Synth)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Track Toggles -->
+                <div class="flex flex-col gap-2">
+                    <span class="text-xs font-bold text-slate-300">Tracks in Composition</span>
+                    <div id="trackList" class="flex flex-col gap-1.5 max-h-[160px] overflow-y-auto pr-1">
+                        <!-- Tracks will inject dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- LLM Processing/Config Card -->
+            <div class="bg-slate-900/30 border border-slate-900 rounded-2xl p-5 flex flex-col gap-4">
+                <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-violet-400"></i> LLM Formatting Strategy
+                </h3>
+
+                <!-- Format Choices -->
+                <div class="flex flex-col gap-3">
+                    <!-- Option 1 -->
+                    <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-950 border border-slate-900 cursor-pointer hover:border-slate-800 transition">
+                        <input type="radio" name="exportFormat" value="summary" checked onchange="regenerateOutput()" class="mt-1 accent-violet-500">
+                        <div>
+                            <span class="block text-xs font-bold text-slate-200">Musical Abstract & Metrics</span>
+                            <span class="block text-[10px] text-slate-400 leading-normal mt-0.5">High-level analysis, tempo markers, key sign signature indicators, dynamic ranges, and pitch histograms. Best for arrangement & analysis tasks.</span>
+                        </div>
+                    </label>
+
+                    <!-- Option 2 -->
+                    <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-950 border border-slate-900 cursor-pointer hover:border-slate-800 transition">
+                        <input type="radio" name="exportFormat" value="chronological" onchange="regenerateOutput()" class="mt-1 accent-violet-500">
+                        <div>
+                            <span class="block text-xs font-bold text-slate-200">Chronological Event Stream (Compact)</span>
+                            <span class="block text-[10px] text-slate-400 leading-normal mt-0.5">Note-by-note event logs showing precise timelines, velocities, and tracking labels. Ideal for having LLMs rewrite, trim, or transpose.</span>
+                        </div>
+                    </label>
+
+                    <!-- Option 3 -->
+                    <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-950 border border-slate-900 cursor-pointer hover:border-slate-800 transition">
+                        <input type="radio" name="exportFormat" value="grid" onchange="regenerateOutput()" class="mt-1 accent-violet-500">
+                        <div>
+                            <span class="block text-xs font-bold text-slate-200">Measure & Chord Grid</span>
+                            <span class="block text-[10px] text-slate-400 leading-normal mt-0.5">Groups notes occurring together into sequential chord clusters organized by beats. Best for chord theory analysis and generation.</span>
+                        </div>
+                    </label>
+
+                    <!-- Option 4 -->
+                    <label class="flex items-start gap-3 p-3 rounded-xl bg-slate-950 border border-slate-900 cursor-pointer hover:border-slate-800 transition">
+                        <input type="radio" name="exportFormat" value="json" onchange="regenerateOutput()" class="mt-1 accent-violet-500">
+                        <div>
+                            <span class="block text-xs font-bold text-slate-200">Clean Developer JSON Array</span>
+                            <span class="block text-[10px] text-slate-400 leading-normal mt-0.5">Stripped-down, minimal keyframes structured for algorithmic ingest or programmatic model inputs.</span>
+                        </div>
+                    </label>
+                </div>
+
+                <!-- Custom Note Ingest Limit Slider -->
+                <div class="flex flex-col gap-1.5">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="font-bold text-slate-300">Max Note Limit</span>
+                        <span id="limitLabel" class="font-mono text-violet-400">500 notes</span>
+                    </div>
+                    <input type="range" id="noteLimitSlider" min="100" max="2500" step="100" value="500" oninput="updateNoteLimit(this.value)" class="w-full accent-violet-500 bg-slate-900 h-1.5 rounded-lg cursor-pointer">
+                    <span class="text-[9px] text-slate-500">Fewer notes keep context window lightweight and prevent LLM truncation.</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Main Panel / Prompt Output Sandbox (Col Span 7) -->
+        <section class="lg:col-span-7 flex flex-col gap-4 h-full min-h-[500px]">
+            <div class="bg-slate-900/30 border border-slate-900 rounded-2xl p-5 flex flex-col h-full gap-4">
+                
+                <!-- Action Headers -->
+                <div class="flex items-center justify-between flex-wrap gap-3 border-b border-slate-900 pb-4">
+                    <div>
+                        <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
+                            <i class="fa-solid fa-terminal text-violet-400"></i> LLM Ingest Output
+                        </h2>
+                        <p class="text-[11px] text-slate-400">Copy this text stream straight into your AI workspace prompt</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="downloadAsTxt()" class="bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-semibold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-download"></i> Save .TXT
+                        </button>
+                        <button onclick="copyOutput()" class="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition flex items-center gap-1.5 shadow-lg shadow-violet-900/10">
+                            <i class="fa-solid fa-copy"></i> Copy Prompt
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Prompt Helper Header Banner (Included in the final copy) -->
+                <div class="bg-violet-950/20 border border-violet-900/20 rounded-xl p-3 flex items-start gap-3">
+                    <div class="text-violet-400 mt-0.5">
+                        <i class="fa-solid fa-circle-info text-sm"></i>
+                    </div>
+                    <div class="text-xs">
+                        <span class="font-bold text-violet-300 block mb-0.5">Ready-to-use Prompt Context Included!</span>
+                        <p class="text-slate-400 leading-relaxed">The box below automatically prepends custom systemic instructions. Your chosen LLM will immediately understand how to interpret the chronological notation grid.</p>
+                    </div>
+                </div>
+
+                <!-- Output Display Window -->
+                <div class="flex-1 relative flex flex-col">
+                    <textarea id="outputText" readonly class="w-full flex-1 min-h-[300px] lg:min-h-0 bg-slate-950 border border-slate-900 rounded-xl p-4 font-mono text-xs text-slate-300 focus:outline-none focus:border-slate-800 resize-none leading-relaxed" placeholder="Drag & drop a MIDI file on the left side to get started..."></textarea>
+                    
+                    <!-- Copy Alert Toast (absolute inside textarea area) -->
+                    <div id="toast" class="absolute bottom-4 right-4 bg-emerald-500 text-slate-950 text-xs font-bold px-4 py-2 rounded-lg opacity-0 pointer-events-none transition duration-300 shadow-lg flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-check"></i> Copied to Clipboard!
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <!-- GitHub Pages Deployment Guide Modal (Hidden by Default) -->
+    <div id="deployModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 opacity-0 pointer-events-none transition duration-300">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 flex flex-col gap-4 shadow-2xl">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <h3 class="text-base font-bold text-slate-100 flex items-center gap-2">
+                    <i class="fa-brands fa-github text-violet-400"></i> Deploy to GitHub Pages (Free)
+                </h3>
+                <button onclick="toggleDeployModal()" class="text-slate-400 hover:text-white transition">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            
+            <div class="text-xs text-slate-300 flex flex-col gap-4 leading-relaxed">
+                <p>Since this converter is built purely as a static client-side web application, you can publish it live on your GitHub Repository for instant access on any device with these easy steps:</p>
+                
+                <ol class="list-decimal list-inside flex flex-col gap-2.5 bg-slate-950 p-4 rounded-xl border border-slate-850">
+                    <li>Name this HTML code file exactly <code class="text-violet-400 font-mono">index.html</code>.</li>
+                    <li>Commit and push <code class="text-violet-400 font-mono">index.html</code> directly to your main repository branch.</li>
+                    <li>In GitHub, click on your repository's <strong class="text-slate-100">Settings</strong> tab.</li>
+                    <li>On the left sidebar, select <strong class="text-slate-100">Pages</strong>.</li>
+                    <li>Under <strong class="text-slate-100">Build and deployment</strong>, set Source to <strong class="text-slate-100">Deploy from a branch</strong>.</li>
+                    <li>Choose your branch (typically <code class="text-slate-400 font-mono">main</code>) and folder path (<code class="text-slate-400 font-mono">/ (root)</code>), then click <strong class="text-slate-100">Save</strong>.</li>
+                </ol>
+
+                <p class="text-slate-400">Within 1-2 minutes, GitHub will issue a dynamic web URL (e.g. <code class="text-violet-400 font-mono">https://username.github.io/repo-name/</code>) where you can access and drag files to this converter from any phone, laptop, or tablet!</p>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t border-slate-800 pt-3 mt-1">
+                <button onclick="toggleDeployModal()" class="bg-violet-600 hover:bg-violet-500 text-white font-semibold text-xs px-4 py-2 rounded-lg transition">
+                    Got it!
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Footer -->
+    <footer class="border-t border-slate-900 bg-slate-950 px-6 py-4 text-center">
+        <p class="text-[10px] text-slate-500 font-medium">MIDI-to-Text Studio | Privacy Guard: All conversion calculations and playback occur offline directly inside your web client.</p>
+    </footer>
+
+    <script>
+        /* Core state variables */
+        let loadedMidiData = null;
+        let selectedTracks = [];
+        let noteLimit = 500;
+        
+        /* Web Audio Preview variables */
+        let audioCtx = null;
+        let activeOscillators = [];
+        let playbackInterval = null;
+        let isPlaying = false;
+        let playbackStartTime = 0;
+        let pausedAt = 0;
+        let currentDuration = 0;
+        let synthType = 'triangle';
+
+        /* Drag & Drop Visual Event Hooks */
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropzone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropzone.classList.add('drag-over');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropzone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropzone.classList.remove('drag-over');
+            }, false);
+        });
+
+        dropzone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length) {
+                processIncomingMidi(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                processIncomingMidi(e.target.files[0]);
+            }
+        });
+
+        // Toggle Deployment Guide Modal
+        function toggleDeployModal() {
+            const modal = document.getElementById('deployModal');
+            if (modal.classList.contains('opacity-0')) {
+                modal.classList.remove('opacity-0', 'pointer-events-none');
+                modal.classList.add('opacity-100');
+            } else {
+                modal.classList.add('opacity-0', 'pointer-events-none');
+                modal.classList.remove('opacity-100');
+            }
+        }
+
+        function processIncomingMidi(file) {
+            if (!file.name.endsWith('.mid') && !file.name.endsWith('.midi')) {
+                alertBox('Invalid File Format', 'Please upload a standard .mid or .midi binary file.', 'error');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    // Initialize Midi class with raw array buffer
+                    const midi = new Midi(e.target.result);
+                    loadedMidiData = midi;
+                    
+                    // Reset Track selections
+                    selectedTracks = midi.tracks.map((_, idx) => idx);
+                    
+                    // Update visual state
+                    updateMidiDashboard(midi, file.name);
+                    regenerateOutput();
+                    
+                    // Show Dashboard & Hide Upload zone text
+                    document.getElementById('metaCard').classList.remove('hidden');
+                    document.getElementById('dropzone').classList.add('py-4', 'min-h-0');
+                    document.getElementById('dropzone').querySelector('p').classList.add('hidden');
+                    document.getElementById('dropzone').querySelector('h3').textContent = "Upload New MIDI File";
+                } catch(error) {
+                    console.error("MIDI parsing failure:", error);
+                    alertBox('Midi Error', 'Could not parse the binary sequence of this MIDI file. Ensure it is not corrupted.', 'error');
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function updateMidiDashboard(midi, filename) {
+            // Song Name
+            document.getElementById('songTitle').textContent = midi.name || filename;
+            
+            // BPM Calculation (safely reads first tempo track)
+            const bpm = midi.header.tempos.length > 0 ? Math.round(midi.header.tempos[0].bpm) : 120;
+            document.getElementById('metaBPM').innerHTML = `${bpm} <span class="text-[10px] font-normal text-slate-500">BPM</span>`;
+            
+            // Time Signature
+            const timeSig = midi.header.timeSignatures.length > 0 ? `${midi.header.timeSignatures[0].timeSignature[0]}/${midi.header.timeSignatures[0].timeSignature[1]}` : '4/4';
+            document.getElementById('metaTimeSig').textContent = timeSig;
+            
+            // Duration Display
+            currentDuration = midi.duration;
+            document.getElementById('metaDuration').textContent = formatSeconds(midi.duration);
+            document.getElementById('playbackTimer').textContent = `00:00 / ${formatSeconds(midi.duration)}`;
+            
+            // Reset Progress bar
+            document.getElementById('progressBar').style.width = '0%';
+
+            // Generate Track list selections
+            const trackListContainer = document.getElementById('trackList');
+            trackListContainer.innerHTML = '';
+
+            midi.tracks.forEach((track, idx) => {
+                const noteCount = track.notes.length;
+                if (noteCount === 0) return; // Skip completely empty tracks
+
+                const trackDiv = document.createElement('div');
+                trackDiv.className = "flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-900 text-xs";
+                
+                trackDiv.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" id="track_${idx}" checked onchange="toggleTrack(${idx})" class="accent-violet-500 rounded">
+                        <span class="font-medium text-slate-300 truncate max-w-[150px]">${track.name || `Track ${idx + 1}`}</span>
+                    </div>
+                    <span class="text-[10px] text-slate-500 font-semibold">${noteCount} notes</span>
+                `;
+                trackListContainer.appendChild(trackDiv);
+            });
+        }
+
+        function toggleTrack(trackIdx) {
+            const index = selectedTracks.indexOf(trackIdx);
+            if (index > -1) {
+                selectedTracks.splice(index, 1);
+            } else {
+                selectedTracks.push(trackIdx);
+            }
+            regenerateOutput();
+            stopPlayback(); // Stop playback to sync changed structures
+        }
+
+        function updateNoteLimit(val) {
+            noteLimit = parseInt(val);
+            document.getElementById('limitLabel').textContent = `${noteLimit} notes`;
+            regenerateOutput();
+        }
+
+        function unloadMidi() {
+            stopPlayback();
+            loadedMidiData = null;
+            selectedTracks = [];
+            
+            // Return UI to default state
+            document.getElementById('metaCard').classList.add('hidden');
+            document.getElementById('dropzone').classList.remove('py-4', 'min-h-0');
+            document.getElementById('dropzone').querySelector('p').classList.remove('hidden');
+            document.getElementById('dropzone').querySelector('h3').textContent = "Drag & Drop MIDI File";
+            document.getElementById('outputText').value = "";
+            fileInput.value = "";
+        }
+
+        function regenerateOutput() {
+            if (!loadedMidiData) return;
+
+            const format = document.querySelector('input[name="exportFormat"]:checked').value;
+            const textarea = document.getElementById('outputText');
+            
+            // Setup generic system prompt frame
+            let promptText = `### SYSTEM INSTRUCTIONS FOR MUSIC AI & LARGE LANGUAGE MODELS ###\n`;
+            promptText += `You are an expert music analyst, transposer, and arrangement assistant.\n`;
+            promptText += `Below is a structural transcription of a MIDI file. Use this transcript to analyze the harmony, identify scales, transpose patterns, analyze pacing, or compose expansions.\n`;
+            promptText += `------------------------------------------------------------\n\n`;
+
+            // Setup basic metadata block
+            const bpm = loadedMidiData.header.tempos.length > 0 ? Math.round(loadedMidiData.header.tempos[0].bpm) : 120;
+            const timeSig = loadedMidiData.header.timeSignatures.length > 0 ? `${loadedMidiData.header.timeSignatures[0].timeSignature[0]}/${loadedMidiData.header.timeSignatures[0].timeSignature[1]}` : '4/4';
+            
+            promptText += `== COMPOSITION METRICS ==\n`;
+            promptText += `- Name: ${loadedMidiData.name || "Untitled Track"}\n`;
+            promptText += `- Tempo: ${bpm} BPM\n`;
+            promptText += `- Time Signature: ${timeSig}\n`;
+            promptText += `- Overall Duration: ${formatSeconds(loadedMidiData.duration)}\n`;
+            promptText += `- Analyzed Tracks: ${selectedTracks.map(idx => loadedMidiData.tracks[idx].name || `Track ${idx+1}`).join(', ')}\n\n`;
+
+            // Fetch and flatten notes from active tracks
+            let allNotes = [];
+            selectedTracks.forEach(idx => {
+                const track = loadedMidiData.tracks[idx];
+                track.notes.forEach(note => {
+                    allNotes.push({
+                        ...note,
+                        trackName: track.name || `Track ${idx + 1}`
+                    });
+                });
+            });
+
+            // Sort chronologically
+            allNotes.sort((a, b) => a.time - b.time);
+
+            // Limit processing array to protect context window limits
+            const sliceLimit = Math.min(allNotes.length, noteLimit);
+            const processedNotes = allNotes.slice(0, sliceLimit);
+
+            if (allNotes.length > noteLimit) {
+                promptText += `* Note: This output shows the first ${noteLimit} notes of the total ${allNotes.length} notes to preserve performance limits *\n\n`;
+            }
+
+            // Apply designated strategy formatting logic
+            if (format === 'summary') {
+                promptText += generateSummaryFormat(processedNotes, bpm, allNotes.length);
+            } else if (format === 'chronological') {
+                promptText += generateChronologicalFormat(processedNotes);
+            } else if (format === 'grid') {
+                promptText += generateGridFormat(processedNotes, bpm, timeSig);
+            } else if (format === 'json') {
+                promptText += generateJsonFormat(processedNotes);
+            }
+
+            textarea.value = promptText;
+        }
+
+        function generateSummaryFormat(notes, bpm, totalNotes) {
+            let out = `== MUSICAL ABSTRACT & SCALE HISTOGRAM ==\n\n`;
+            
+            // Build key count distribution
+            const pitchClassNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            let pitchDist = Array(12).fill(0);
+            let octaves = {};
+            let lowestNote = 127;
+            let highestNote = 0;
+            let maxVelocity = 0;
+            let minVelocity = 1;
+
+            notes.forEach(note => {
+                const pitchClass = note.midi % 12;
+                pitchDist[pitchClass]++;
+                
+                const octave = Math.floor(note.midi / 12) - 1;
+                octaves[octave] = (octaves[octave] || 0) + 1;
+
+                if (note.midi < lowestNote) lowestNote = note.midi;
+                if (note.midi > highestNote) highestNote = note.midi;
+                if (note.velocity > maxVelocity) maxVelocity = note.velocity;
+                if (note.velocity < minVelocity) minVelocity = note.velocity;
+            });
+
+            // Format pitch distribution
+            out += `Note Occurrence Count Histogram (Relative scale weight):\n`;
+            pitchClassNames.forEach((name, i) => {
+                const count = pitchDist[i];
+                const bar = "█".repeat(Math.min(count, 15)) + (count > 15 ? "+" : "");
+                out += `  - ${name.padEnd(3)}: ${count.toString().padEnd(4)} ${bar}\n`;
+            });
+
+            out += `\nRange & Dynamics Metrics:\n`;
+            out += `  - Pitch Boundaries: Lowest Midi (${lowestNote} / ${pitchClassNames[lowestNote%12]}${Math.floor(lowestNote/12)-1}), Highest Midi (${highestNote} / ${pitchClassNames[highestNote%12]}${Math.floor(highestNote/12)-1})\n`;
+            out += `  - Dynamic Range Bounds: Min Velocity ${(minVelocity*127).toFixed(0)}, Max Velocity ${(maxVelocity*127).toFixed(0)}\n\n`;
+
+            out += `Chronological Section Blocks (Quick Navigation Grid):\n`;
+            
+            // Slice into 4 parts
+            if (notes.length > 0) {
+                const step = Math.floor(notes.length / 4);
+                for (let i = 0; i < 4; i++) {
+                    const startIdx = i * step;
+                    const endIdx = Math.min(startIdx + step - 1, notes.length - 1);
+                    if (startIdx >= notes.length) break;
+                    
+                    const startTime = notes[startIdx].time.toFixed(2);
+                    const endTime = notes[endIdx].time.toFixed(2);
+                    
+                    out += `  - Section ${i + 1} (${startTime}s to ${endTime}s): Contains notes ${notes[startIdx].name} through ${notes[endIdx].name}\n`;
+                }
+            }
+
+            return out;
+        }
+
+        function generateChronologicalFormat(notes) {
+            let out = `== CHRONOLOGICAL EVENT STREAM ==\n`;
+            out += `Format: [Timestamp in Seconds] | [Track Name] | Note Name (MIDI Number) | Velocity | Duration (Seconds)\n`;
+            out += `-----------------------------------------------------------------------------------------\n`;
+
+            notes.forEach(note => {
+                const ts = note.time.toFixed(3).padStart(7);
+                const track = note.trackName.padEnd(16).substring(0, 16);
+                const pitch = `${note.name} (MIDI ${note.midi})`.padEnd(15);
+                const vel = `Vel: ${Math.round(note.velocity * 127)}`.padEnd(8);
+                const dur = `Dur: ${note.duration.toFixed(3)}s`;
+                
+                out += `[${ts}s] | ${track} | ${pitch} | ${vel} | ${dur}\n`;
+            });
+
+            return out;
+        }
+
+        function generateGridFormat(notes, bpm, timeSig) {
+            let out = `== MEASURE & BEAT CHORD GRID ==\n`;
+            out += `Groups notes by their approximate start beat to identify harmonic blocks.\n\n`;
+
+            // Extract numerator of time signature
+            let beatsPerMeasure = 4;
+            try {
+                beatsPerMeasure = parseInt(timeSig.split('/')[0]);
+            } catch(e) {}
+
+            const secondsPerBeat = 60 / bpm;
+            
+            // Group notes by beat bucket
+            let beatBuckets = {};
+            notes.forEach(note => {
+                // Determine precise beat location
+                const absoluteBeat = note.time / secondsPerBeat;
+                // Round to nearest eighth note (0.5 of a beat)
+                const quantizedBeat = Math.round(absoluteBeat * 2) / 2;
+
+                if (!beatBuckets[quantizedBeat]) {
+                    beatBuckets[quantizedBeat] = [];
+                }
+                beatBuckets[quantizedBeat].push(note.name);
+            });
+
+            // Sort beats
+            const sortedBeats = Object.keys(beatBuckets).map(Number).sort((a, b) => a - b);
+
+            let currentMeasure = -1;
+            sortedBeats.forEach(beat => {
+                const measure = Math.floor(beat / beatsPerMeasure) + 1;
+                const beatInMeasure = (beat % beatsPerMeasure) + 1;
+
+                // Eliminate duplicates in the chord bucket for readability
+                const uniqueNotes = [...new Set(beatBuckets[beat])];
+
+                if (measure !== currentMeasure) {
+                    currentMeasure = measure;
+                    out += `\n[Measure ${currentMeasure}]\n`;
+                }
+
+                out += `  - Beat ${beatInMeasure.toFixed(1)}: { ${uniqueNotes.join(', ')} }\n`;
+            });
+
+            return out;
+        }
+
+        function generateJsonFormat(notes) {
+            // Clean arrays to map standard properties directly
+            const cleanArray = notes.map(note => ({
+                t: parseFloat(note.time.toFixed(3)),
+                n: note.name,
+                m: note.midi,
+                v: Math.round(note.velocity * 127),
+                d: parseFloat(note.duration.toFixed(3)),
+                trk: note.trackName
+            }));
+
+            return JSON.stringify(cleanArray, null, 2);
+        }
+
+        function formatSeconds(sec) {
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function copyOutput() {
+            const text = document.getElementById('outputText').value;
+            if (!text) return;
+
+            // Direct Clipboard fallback structure
+            const el = document.createElement('textarea');
+            el.value = text;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+
+            // Pop toast alert
+            const toast = document.getElementById('toast');
+            toast.classList.remove('opacity-0', 'pointer-events-none');
+            toast.classList.add('opacity-100');
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'pointer-events-none');
+                toast.classList.remove('opacity-100');
+            }, 2500);
+        }
+
+        function downloadAsTxt() {
+            const text = document.getElementById('outputText').value;
+            if (!text) return;
+
+            const filename = (loadedMidiData?.name || "midi-llm-transcript") + ".txt";
+            const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+            const link = document.createElement("a");
+            
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+
+        function initAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function updateSynthType(val) {
+            synthType = val;
+        }
+
+        function togglePlay() {
+            if (!loadedMidiData) return;
+            initAudioContext();
+
+            if (isPlaying) {
+                pausePlayback();
+            } else {
+                startPlayback();
+            }
+        }
+
+        function startPlayback() {
+            isPlaying = true;
+            document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-pause text-sm"></i>';
+            
+            // Handle Resume from Paused Index
+            playbackStartTime = audioCtx.currentTime - pausedAt;
+            
+            // Loop & trigger scheduling loop
+            playbackInterval = setInterval(() => {
+                const elapsed = audioCtx.currentTime - playbackStartTime;
+                
+                // End of track reached
+                if (elapsed >= currentDuration) {
+                    stopPlayback();
+                    return;
+                }
+
+                // Update visual Progress Scrubber
+                const percentage = (elapsed / currentDuration) * 100;
+                document.getElementById('progressBar').style.width = `${percentage}%`;
+                document.getElementById('playbackTimer').textContent = `${formatSeconds(elapsed)} / ${formatSeconds(currentDuration)}`;
+            }, 100);
+
+            // Fetch and schedule active tracks' notes
+            let notesToPlay = [];
+            selectedTracks.forEach(idx => {
+                loadedMidiData.tracks[idx].notes.forEach(note => {
+                    notesToPlay.push(note);
+                });
+            });
+
+            // Schedule future synthesiser audio nodes
+            const now = audioCtx.currentTime;
+            notesToPlay.forEach(note => {
+                // If the note starts after our current paused location
+                if (note.time >= pausedAt) {
+                    const relativePlayTime = playbackStartTime + note.time;
+                    triggerPolyphonicSynth(note.midi, relativePlayTime, note.duration, note.velocity);
+                }
+            });
+        }
+
+        function triggerPolyphonicSynth(midiNumber, startTime, duration, velocity) {
+            // Formula to convert midi index to frequency
+            const freq = Math.pow(2, (midiNumber - 69) / 12) * 440;
+            
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            osc.type = synthType;
+            osc.frequency.setValueAtTime(freq, startTime);
+
+            // Simple attack decay release envelope
+            const attack = 0.01;
+            const release = 0.15;
+            const volume = velocity * 0.15; // Soften aggregate volume
+
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(volume, startTime + attack);
+            gainNode.gain.setValueAtTime(volume, startTime + duration);
+            gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration + release);
+
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            osc.start(startTime);
+            osc.stop(startTime + duration + release);
+
+            // Record references to force stop mid-flight notes
+            activeOscillators.push({ osc, gainNode, stopTime: startTime + duration + release });
+        }
+
+        function pausePlayback() {
+            isPlaying = false;
+            document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-play text-sm"></i>';
+            
+            clearInterval(playbackInterval);
+            pausedAt = audioCtx.currentTime - playbackStartTime;
+            
+            killActiveOscillators();
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-play text-sm"></i>';
+            
+            clearInterval(playbackInterval);
+            pausedAt = 0;
+            
+            killActiveOscillators();
+            
+            document.getElementById('progressBar').style.width = '0%';
+            if (loadedMidiData) {
+                document.getElementById('playbackTimer').textContent = `00:00 / ${formatSeconds(currentDuration)}`;
+            }
+        }
+
+        function killActiveOscillators() {
+            activeOscillators.forEach(item => {
+                try {
+                    item.osc.stop();
+                    item.osc.disconnect();
+                    item.gainNode.disconnect();
+                } catch(e) {}
+            });
+            activeOscillators = [];
+        }
+
+        // Generic error/info prompt alert replacement to obey "No Alert" rule
+        function alertBox(title, message, type = 'info') {
+            const accentColor = type === 'error' ? 'text-rose-400 border-rose-500/20 bg-rose-500/10' : 'text-violet-400 border-violet-500/20 bg-violet-500/10';
+            
+            const box = document.createElement('div');
+            box.className = `fixed bottom-6 left-6 max-w-sm border p-4 rounded-xl shadow-2xl z-50 transition duration-500 transform translate-y-10 opacity-0 ${accentColor}`;
+            box.innerHTML = `
+                <div class="flex items-start gap-3">
+                    <div class="mt-0.5"><i class="fa-solid ${type === 'error' ? 'fa-triangle-exclamation' : 'fa-circle-info'} text-lg"></i></div>
+                    <div>
+                        <h4 class="font-bold text-xs text-slate-100">${title}</h4>
+                        <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">${message}</p>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(box);
+            
+            // Smooth entrance
+            setTimeout(() => {
+                box.classList.remove('translate-y-10', 'opacity-0');
+            }, 100);
+
+            // Automatic dismissal
+            setTimeout(() => {
+                box.classList.add('translate-y-10', 'opacity-0');
+                setTimeout(() => {
+                    document.body.removeChild(box);
+                }, 500);
+            }, 5000);
+        }
+
+        // Add Progress scrubber clicking
+        document.getElementById('progressBarContainer').addEventListener('click', function(e) {
+            if (!loadedMidiData) return;
+            const rect = this.getBoundingClientRect();
+            const clickPosition = (e.clientX - rect.left) / rect.width;
+            
+            initAudioContext();
+            const wasPlaying = isPlaying;
+            
+            if (wasPlaying) pausePlayback();
+            
+            pausedAt = clickPosition * currentDuration;
+            document.getElementById('progressBar').style.width = `${clickPosition * 100}%`;
+            document.getElementById('playbackTimer').textContent = `${formatSeconds(pausedAt)} / ${formatSeconds(currentDuration)}`;
+            
+            if (wasPlaying) startPlayback();
+        });
+    </script>
+</body>
+</html>
