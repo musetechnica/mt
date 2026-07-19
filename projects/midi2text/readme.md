@@ -1,0 +1,1 @@
+The midi2text app is built with standard JavaScript/HTML and converts standard midi files into text files that can be read by large language models (LLMs). Common use cases include musical analysis and midi script development for Logic Pro's Scripter plugin.
